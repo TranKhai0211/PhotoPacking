@@ -342,8 +342,8 @@ export default function OrderListPage({
   }
 
   return (
-    <div className="bg-surface text-on-surface h-screen h-dvh flex flex-col overflow-hidden">
-      <div className="pwa-container h-full flex flex-col overflow-hidden relative">
+    <div className="bg-surface w-full text-on-surface h-screen h-dvh flex flex-col overflow-hidden">
+      <div className="pwa-container w-full h-full flex flex-col overflow-hidden relative">
         {/* ========================================================= */}
         {/* PHẦN 1 CỐ ĐỊNH: TopAppBar (Header trạm kiểm soát)       */}
         {/* ========================================================= */}
@@ -367,8 +367,8 @@ export default function OrderListPage({
               search
             </span>
             <input
-              className="w-full bg-transparent border-0 p-0 text-[13px] text-on-surface placeholder:text-secondary focus:ring-0 focus:outline-none"
-              placeholder="Tìm kiếm đơn hàng, mã sản phẩm..."
+              className="w-full bg-transparent border-0 p-0 text-[13px] text-on-surface placeholder:text-gray-400 focus:ring-0 focus:outline-none"
+              placeholder="Tìm kiếm PO"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -401,33 +401,29 @@ export default function OrderListPage({
             <button
               type="button"
               onClick={() => setActiveTab("pending")}
-              className={`text-left p-3.5 rounded-xl flex flex-col justify-between shadow-sm min-h-[92px] transition-all duration-200 active:scale-[0.98] ${
-                activeTab === "pending"
-                  ? "bg-[#1b365d] text-white ring-2 ring-primary/20 shadow-md"
-                  : "bg-surface-container-high border border-outline-variant hover:bg-surface-container"
-              }`}
+              className={`text-left p-3.5 rounded-xl flex flex-col justify-between shadow-sm min-h-[92px] transition-all duration-200 active:scale-[0.98] ${activeTab === "pending"
+                ? "bg-[#1b365d] text-white ring-2 ring-primary/20 shadow-md"
+                : "bg-surface-container-high border border-outline-variant hover:bg-surface-container"
+                }`}
             >
               <div className="flex items-center justify-between w-full">
                 <span
-                  className={`text-[12px] font-medium ${
-                    activeTab === "pending" ? "text-slate-200" : "text-secondary"
-                  }`}
+                  className={`text-[12px] font-medium ${activeTab === "pending" ? "text-slate-200" : "text-secondary"
+                    }`}
                 >
                   Chờ chụp
                 </span>
                 <span
-                  className={`material-symbols-outlined text-[20px] ${
-                    activeTab === "pending" ? "text-amber-300" : "text-secondary"
-                  }`}
+                  className={`material-symbols-outlined text-[20px] ${activeTab === "pending" ? "text-amber-300" : "text-secondary"
+                    }`}
                 >
                   schedule
                 </span>
               </div>
               <div>
                 <p
-                  className={`text-3xl font-bold tracking-tight leading-none ${
-                    activeTab === "pending" ? "text-white" : "text-primary"
-                  }`}
+                  className={`text-3xl font-bold tracking-tight leading-none ${activeTab === "pending" ? "text-white" : "text-primary"
+                    }`}
                 >
                   12
                 </p>
@@ -438,24 +434,21 @@ export default function OrderListPage({
             <button
               type="button"
               onClick={() => setActiveTab("completed")}
-              className={`text-left p-3.5 rounded-xl flex flex-col justify-between shadow-sm min-h-[92px] transition-all duration-200 active:scale-[0.98] ${
-                activeTab === "completed"
-                  ? "bg-[#1b365d] text-white ring-2 ring-primary/20 shadow-md"
-                  : "bg-surface-container-high border border-outline-variant hover:bg-surface-container"
-              }`}
+              className={`text-left p-3.5 rounded-xl flex flex-col justify-between shadow-sm min-h-[92px] transition-all duration-200 active:scale-[0.98] ${activeTab === "completed"
+                ? "bg-[#1b365d] text-white ring-2 ring-primary/20 shadow-md"
+                : "bg-surface-container-high border border-outline-variant hover:bg-surface-container"
+                }`}
             >
               <div className="flex items-center justify-between w-full">
                 <span
-                  className={`text-[12px] font-medium ${
-                    activeTab === "completed" ? "text-slate-200" : "text-secondary"
-                  }`}
+                  className={`text-[12px] font-medium ${activeTab === "completed" ? "text-slate-200" : "text-secondary"
+                    }`}
                 >
                   Đã hoàn tất
                 </span>
                 <span
-                  className={`material-symbols-outlined text-[20px] ${
-                    activeTab === "completed" ? "text-emerald-400" : "text-emerald-600"
-                  }`}
+                  className={`material-symbols-outlined text-[20px] ${activeTab === "completed" ? "text-emerald-400" : "text-emerald-600"
+                    }`}
                   style={{ fontVariationSettings: "'FILL' 1" }}
                 >
                   check_circle
@@ -463,9 +456,8 @@ export default function OrderListPage({
               </div>
               <div>
                 <p
-                  className={`text-3xl font-bold tracking-tight leading-none ${
-                    activeTab === "completed" ? "text-white" : "text-primary"
-                  }`}
+                  className={`text-3xl font-bold tracking-tight leading-none ${activeTab === "completed" ? "text-white" : "text-primary"
+                    }`}
                 >
                   08
                 </p>
@@ -703,9 +695,8 @@ export default function OrderListPage({
             type="button"
           >
             <span
-              className={`material-symbols-outlined text-[22px] transition-transform duration-500 ${
-                isRefreshing ? "rotate-180" : ""
-              }`}
+              className={`material-symbols-outlined text-[22px] transition-transform duration-500 ${isRefreshing ? "rotate-180" : ""
+                }`}
             >
               refresh
             </span>
