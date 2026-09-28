@@ -95,7 +95,7 @@ export const MOCK_PHOTO_PACKING_ITEMS: PhotoPackingItem[] = [
     "qrPayload": "101008451911"
   },
   {
-    "po": "101009381684",
+    "po": "101008211704;KXL06150M-N2-F;XSDD2026031200994;1;",
     "productCode": "H0168278",
     "productName": "HF-KXL06-F-HNC-SUS",
     "quantity": 10,

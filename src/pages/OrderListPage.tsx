@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   RotateCcw,
   X,
@@ -13,6 +13,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
+import { OrderListSkeleton } from "@/components/OrderCardSkeleton"
 import type { OrderItem } from "@/types/orderItem"
 
 // 12 Đơn hàng mẫu cho Tab "Chờ chụp" (khớp số lượng thống kê 12)
@@ -289,14 +290,34 @@ const COMPLETED_ORDERS_MOCK: OrderItem[] = [
   },
 ]
 
+/**
+ * Giả lập API gọi lấy danh sách đơn hàng PO từ server backend
+ * Trả về danh sách đơn hàng Chờ chụp và Đã hoàn tất sau khoảng thời gian xử lý của API
+ */
+async function fetchOrdersFromApi(): Promise<{
+  pending: OrderItem[]
+  completed: OrderItem[]
+}> {
+  // Giả lập độ trễ kết nối mạng từ server API (700ms)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  return {
+    pending: [...PENDING_ORDERS_MOCK],
+    completed: [...COMPLETED_ORDERS_MOCK],
+  }
+}
+
 interface OrderListPageProps {
   onOpenOrderCamera: (order: OrderItem) => void
   onOpenScanCamera: () => void
+  isLoading?: boolean
+  onRefresh?: () => Promise<void> | void
 }
 
 export default function OrderListPage({
   onOpenOrderCamera,
   onOpenScanCamera,
+  isLoading: propIsLoading,
+  onRefresh,
 }: OrderListPageProps) {
   // Quản lý 2 Tab chính: "pending" (Chờ chụp) | "completed" (Đã hoàn tất)
   const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending")
@@ -307,38 +328,86 @@ export default function OrderListPage({
   // Đơn hàng đang chọn để xem ảnh chi tiết
   const [viewingOrder, setViewingOrder] = useState<OrderItem | null>(null)
 
-  // Hiệu ứng làm mới danh sách
+  // Danh sách đơn hàng nhận từ API
+  const [pendingOrders, setPendingOrders] = useState<OrderItem[]>([])
+  const [completedOrders, setCompletedOrders] = useState<OrderItem[]>([])
+
+  // Quản lý trạng thái loading khi chờ dữ liệu trả về từ API
+  const [internalLoading, setInternalLoading] = useState(true)
+  const isLoading = propIsLoading !== undefined ? propIsLoading : internalLoading
+
+  // Hiệu ứng làm mới danh sách (vòng xoay của nút refresh)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Gọi API tải danh sách PO khi trang được khởi tạo
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadInitialOrders() {
+      setInternalLoading(true)
+      try {
+        const data = await fetchOrdersFromApi()
+        if (isMounted) {
+          setPendingOrders(data.pending)
+          setCompletedOrders(data.completed)
+        }
+      } catch (error) {
+        console.error("Lỗi khi tải dữ liệu PO từ API:", error)
+      } finally {
+        if (isMounted) {
+          setInternalLoading(false)
+        }
+      }
+    }
+
+    loadInitialOrders()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   // Lọc danh sách theo từ khóa tìm kiếm
   const filteredPendingOrders = useMemo(() => {
-    if (!searchQuery.trim()) return PENDING_ORDERS_MOCK
+    if (!searchQuery.trim()) return pendingOrders
     const q = searchQuery.toLowerCase().trim()
-    return PENDING_ORDERS_MOCK.filter(
+    return pendingOrders.filter(
       (item) =>
         item.orderNumber.toLowerCase().includes(q) ||
         item.product.toLowerCase().includes(q) ||
         item.packageType.toLowerCase().includes(q)
     )
-  }, [searchQuery])
+  }, [searchQuery, pendingOrders])
 
   const filteredCompletedOrders = useMemo(() => {
-    if (!searchQuery.trim()) return COMPLETED_ORDERS_MOCK
+    if (!searchQuery.trim()) return completedOrders
     const q = searchQuery.toLowerCase().trim()
-    return COMPLETED_ORDERS_MOCK.filter(
+    return completedOrders.filter(
       (item) =>
         item.orderNumber.toLowerCase().includes(q) ||
         item.product.toLowerCase().includes(q) ||
         item.packageType.toLowerCase().includes(q)
     )
-  }, [searchQuery])
+  }, [searchQuery, completedOrders])
 
-  // Nút làm mới danh sách
-  const handleRefresh = () => {
+  // Nút làm mới danh sách - kích hoạt lại trạng thái loading chờ API
+  const handleRefresh = async () => {
     setIsRefreshing(true)
-    setTimeout(() => {
+    setInternalLoading(true)
+    try {
+      if (onRefresh) {
+        await onRefresh()
+      } else {
+        const data = await fetchOrdersFromApi()
+        setPendingOrders(data.pending)
+        setCompletedOrders(data.completed)
+      }
+    } catch (error) {
+      console.error("Lỗi khi làm mới dữ liệu từ API:", error)
+    } finally {
       setIsRefreshing(false)
-    }, 600)
+      setInternalLoading(false)
+    }
   }
 
   return (
@@ -421,12 +490,21 @@ export default function OrderListPage({
                 </span>
               </div>
               <div>
-                <p
-                  className={`text-3xl font-bold tracking-tight leading-none ${activeTab === "pending" ? "text-white" : "text-primary"
+                {isLoading ? (
+                  <div
+                    className={`h-8 w-11 rounded-lg animate-pulse my-0.5 ${
+                      activeTab === "pending" ? "bg-white/25" : "bg-slate-300"
                     }`}
-                >
-                  12
-                </p>
+                  />
+                ) : (
+                  <p
+                    className={`text-3xl font-bold tracking-tight leading-none ${
+                      activeTab === "pending" ? "text-white" : "text-primary"
+                    }`}
+                  >
+                    {pendingOrders.length.toString().padStart(2, "0")}
+                  </p>
+                )}
               </div>
             </button>
 
@@ -455,12 +533,21 @@ export default function OrderListPage({
                 </span>
               </div>
               <div>
-                <p
-                  className={`text-3xl font-bold tracking-tight leading-none ${activeTab === "completed" ? "text-white" : "text-primary"
+                {isLoading ? (
+                  <div
+                    className={`h-8 w-11 rounded-lg animate-pulse my-0.5 ${
+                      activeTab === "completed" ? "bg-white/25" : "bg-slate-300"
                     }`}
-                >
-                  08
-                </p>
+                  />
+                ) : (
+                  <p
+                    className={`text-3xl font-bold tracking-tight leading-none ${
+                      activeTab === "completed" ? "text-white" : "text-primary"
+                    }`}
+                  >
+                    {completedOrders.length.toString().padStart(2, "0")}
+                  </p>
+                )}
               </div>
             </button>
           </div>
@@ -471,8 +558,20 @@ export default function OrderListPage({
         {/* CHỈ CÓ KHUNG NÀY ĐƯỢC CUỘN LÊN/XUỐNG                      */}
         {/* ========================================================= */}
         <main className="flex-1 overflow-y-auto overscroll-contain px-4 py-3.5 space-y-3.5 pb-28 scroll-smooth">
-          {/* TAB 1: Danh sách Đơn hàng Chờ chụp (Giao diện Trang 2) */}
-          {activeTab === "pending" && (
+          {/* Hiệu ứng Skeleton Loading hiển thị khi đang chờ dữ liệu trả về từ API */}
+          {isLoading ? (
+            <OrderListSkeleton
+              count={4}
+              message={
+                activeTab === "pending"
+                  ? "Đang tải danh sách PO chờ chụp từ máy chủ..."
+                  : "Đang tải danh sách PO đã hoàn tất từ máy chủ..."
+              }
+            />
+          ) : (
+            <>
+              {/* TAB 1: Danh sách Đơn hàng Chờ chụp (Giao diện Trang 2) */}
+              {activeTab === "pending" && (
             <>
               {filteredPendingOrders.length === 0 ? (
                 <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-8 text-center space-y-2">
@@ -681,22 +780,28 @@ export default function OrderListPage({
               )}
             </>
           )}
+            </>
+          )}
         </main>
 
         {/* ========================================================= */}
         {/* PHẦN 4 CỐ ĐỊNH: Nút nổi FAB ở góc dưới bên phải         */}
         {/* ========================================================= */}
-        <div className="absolute right-5 bottom-6 flex flex-col items-center gap-3 z-40">
+        <div className="absolute right-5 bottom-20 flex flex-col items-center gap-3 z-40">
           {/* Refresh FAB */}
           <button
-            className="w-11 h-11 bg-surface-container-lowest text-primary border border-outline-variant rounded-full shadow-md flex items-center justify-center hover:bg-surface-container active:scale-95 transition-all"
+            className={`w-11 h-11 bg-surface-container-lowest text-primary border border-outline-variant rounded-full shadow-md flex items-center justify-center hover:bg-surface-container active:scale-95 transition-all ${
+              isLoading || isRefreshing ? "opacity-75 cursor-not-allowed" : ""
+            }`}
             onClick={handleRefresh}
-            title="Làm mới danh sách"
+            title={isLoading ? "Đang tải danh sách..." : "Làm mới danh sách"}
             type="button"
+            disabled={isLoading || isRefreshing}
           >
             <span
-              className={`material-symbols-outlined text-[22px] transition-transform duration-500 ${isRefreshing ? "rotate-180" : ""
-                }`}
+              className={`material-symbols-outlined text-[22px] transition-transform duration-500 ${
+                isRefreshing || isLoading ? "animate-spin" : ""
+              }`}
             >
               refresh
             </span>
