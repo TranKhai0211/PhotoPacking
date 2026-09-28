@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "reac
 // [THAM KHẢO QRCODE] - Thư viện jsQR trước đây dùng để đọc mã QR 2D:
 // import jsQR from "jsqr"
 import { scanBarcodeFromCanvas } from "@/services/barcodeScanner"
+import { SCAN_CONFIG } from "@/config/scanConfig"
 import {
   RotateCcw,
   AlertCircle,
@@ -48,6 +49,7 @@ type CameraFlowStep =
 interface CameraPageProps {
   targetOrder?: OrderItem | null
   scannedPO?: PhotoPackingItem | null
+  scannedCodeMeta?: { format?: string; codeType?: "barcode" | "qrcode" } | null
   onBack: () => void
 }
 
@@ -62,11 +64,20 @@ const RESOLUTION_CONFIG: Record<
   "4k": { label: "4K (UHD)", width: 3840, height: 2160 },
 }
 
-export default function CameraPage({ targetOrder, scannedPO, onBack }: CameraPageProps) {
+export default function CameraPage({
+  targetOrder,
+  scannedPO,
+  scannedCodeMeta,
+  onBack,
+}: CameraPageProps) {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment")
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [cameraError, setCameraError] = useState<string | null>(null)
+  const [detectedCodeMeta, setDetectedCodeMeta] = useState<{
+    format?: string
+    codeType?: "barcode" | "qrcode"
+  } | null>(scannedCodeMeta || null)
 
   // Flash / Torch state
   const [isFlashOn, setIsFlashOn] = useState(false)
@@ -309,12 +320,17 @@ export default function CameraPage({ targetOrder, scannedPO, onBack }: CameraPag
         let foundPO: PhotoPackingItem | null = null
 
         /* =====================================================================
-         * 1. ĐỌC MÃ VẠCH BARCODE (Code 128, Code 39, EAN, ITF...) - MỚI:
-         * Sử dụng engine BarcodeDetector native + @zxing/library
+         * 1. ĐỌC MÃ THEO CỜ CẤU HÌNH (SCAN_CONFIG.ACTIVE_MODE: both | barcode | qrcode)
          * ===================================================================== */
-        const scanResult = await scanBarcodeFromCanvas(canvas)
+        const scanResult = await scanBarcodeFromCanvas(canvas, SCAN_CONFIG.ACTIVE_MODE)
         if (scanResult?.text?.trim()) {
           foundPO = lookupPOByBarcode(scanResult.text.trim())
+          if (foundPO) {
+            setDetectedCodeMeta({
+              format: scanResult.format,
+              codeType: scanResult.codeType,
+            })
+          }
         }
 
         /* =====================================================================
@@ -469,6 +485,7 @@ export default function CameraPage({ targetOrder, scannedPO, onBack }: CameraPag
     setApiResult(null)
     setConfirmResult(null)
     setScanErrorMessage(null)
+    setDetectedCodeMeta(null)
 
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream
@@ -808,7 +825,13 @@ export default function CameraPage({ targetOrder, scannedPO, onBack }: CameraPag
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
                       </span>
-                      <span>Đang nhận diện mã vạch Barcode...</span>
+                      <span>
+                        {SCAN_CONFIG.ACTIVE_MODE === "barcode"
+                          ? "Đang nhận diện mã vạch Barcode..."
+                          : SCAN_CONFIG.ACTIVE_MODE === "qrcode"
+                          ? "Đang nhận diện mã QR Code..."
+                          : "Đang nhận diện mã Barcode / QR Code..."}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -961,6 +984,7 @@ export default function CameraPage({ targetOrder, scannedPO, onBack }: CameraPag
           open={flowStep === "confirm-po"}
           detectedPO={detectedPO}
           capturedImage={capturedImage}
+          codeMeta={detectedCodeMeta}
           onConfirm={handleConfirmPO}
           onRetake={handleRetake}
         />

@@ -13,10 +13,16 @@ export default function App() {
   const [targetOrder, setTargetOrder] = useState<OrderItem | null>(null)
   const [scannedPO, setScannedPO] = useState<PhotoPackingItem | null>(null)
 
+  const [scannedCodeMeta, setScannedCodeMeta] = useState<{
+    format?: string
+    codeType?: "barcode" | "qrcode"
+  } | null>(null)
+
   // Mở camera để chụp hoặc chụp lại cho một đơn hàng cụ thể
   const handleOpenOrderCamera = (order: OrderItem) => {
     setTargetOrder(order)
     setScannedPO(null)
+    setScannedCodeMeta(null)
     setView("camera")
   }
 
@@ -24,12 +30,17 @@ export default function App() {
   const handleOpenScanCamera = () => {
     setTargetOrder(null)
     setScannedPO(null)
+    setScannedCodeMeta(null)
     setView("scan")
   }
 
-  // PO được phát hiện từ Scan View → chuyển sang Camera View kèm PO data
-  const handlePODetected = (po: PhotoPackingItem) => {
+  // PO được phát hiện từ Scan View → chuyển sang Camera View kèm PO data và loại mã
+  const handlePODetected = (
+    po: PhotoPackingItem,
+    codeMeta?: { format?: string; codeType?: "barcode" | "qrcode" }
+  ) => {
     setScannedPO(po)
+    setScannedCodeMeta(codeMeta || null)
     setTargetOrder(null)
     setView("camera")
   }
@@ -38,6 +49,7 @@ export default function App() {
   const handleBackToOrders = () => {
     setTargetOrder(null)
     setScannedPO(null)
+    setScannedCodeMeta(null)
     setView("orders")
   }
 
@@ -55,6 +67,7 @@ export default function App() {
       <CameraPage
         targetOrder={targetOrder}
         scannedPO={scannedPO}
+        scannedCodeMeta={scannedCodeMeta}
         onBack={handleBackToOrders}
       />
     )

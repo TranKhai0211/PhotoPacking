@@ -121,13 +121,34 @@ Hàm tra cứu tại [`src/services/poLookup.ts`](file:///d:/Workspace/ReactJS/D
 
 ---
 
-## 5. Cách chuyển đổi hoặc tùy chỉnh cấu hình đọc mã
+## 5. Flag cấu hình và Công cụ trải nghiệm Barcode vs QR Code
 
-Trong file [`src/services/barcodeScanner.ts`](file:///d:/Workspace/ReactJS/DemoWithAI/src/services/barcodeScanner.ts):
+Hệ thống đã được trang bị file cấu hình tập trung tại [`src/config/scanConfig.ts`](file:///d:/Workspace/ReactJS/DemoWithAI/src/config/scanConfig.ts):
 
-- **Chỉ muốn quét Barcode 1D (tối ưu tốc độ cao nhất)**:
-  Bỏ `BarcodeFormat.QR_CODE` và `BarcodeFormat.DATA_MATRIX` ra khỏi mảng `SUPPORTED_FORMATS`.
-- **Muốn quét cả Barcode 1D và QR Code song song (Mặc định)**:
-  Giữ nguyên cấu hình hiện tại, hệ thống sẽ tự động giải mã dù camera hướng vào mã vạch sọc hay mã vuông QR.
-- **Muốn chuyển hẳn về thuần jsQR**:
-  Trong file `ScanPage.tsx` và `CameraPage.tsx`, bỏ ghi chú các khối mã `[MÃ NGUỒN THAM KHẢO]` đã được đánh dấu sẵn.
+### 5.1. Thay đổi Flag trong Code (`scanConfig.ts`)
+Bạn chỉ cần thay đổi giá trị của `ACTIVE_MODE`:
+```typescript
+export const SCAN_CONFIG = {
+  // 🚩 Đổi giá trị tại đây để test: "both" | "barcode" | "qrcode"
+  ACTIVE_MODE: "both" as ScanMode,
+
+  // Bật/tắt thanh chuyển đổi chế độ UI Switcher trên màn hình quét
+  ENABLE_UI_SWITCHER: true,
+}
+```
+
+- `"both"`: Quét song song cả Barcode 1D và QR Code 2D (khung nhắm linh hoạt).
+- `"barcode"`: CHỈ quét mã vạch 1D (Code 128, Code 39...), khung nhắm tự động chuyển sang hình chữ nhật ngang `w-80 h-40` có đường tâm nhắm.
+- `"qrcode"`: CHỈ quét mã QR 2D, khung nhắm tự động chuyển sang hình vuông `w-64 h-64` với 4 góc vuông bo chuẩn.
+
+### 5.2. Chuyển đổi nhanh trực tiếp trên giao diện (UI Switcher)
+Khi vào màn hình quét mã (**Scan View**), bạn sẽ thấy thanh 3 tab nhỏ ở phía trên:
+- **`[ Cả hai ]`**: Tự động nhận diện bất kỳ loại mã nào camera bắt được.
+- **`[ Barcode 1D ]`**: Chuyên biệt quét mã sọc dài trên phiếu PO, tối ưu tốc độ nhận diện hàng ngang.
+- **`[ QR Code 2D ]`**: Chuyên biệt quét mã vuông QR Code.
+
+### 5.3. Nhận biết loại mã trong Dialog Xác nhận
+Khi mã được phát hiện thành công, trong [`ConfirmPODialog`](file:///d:/Workspace/ReactJS/DemoWithAI/src/components/ConfirmPODialog.tsx) sẽ hiển thị rõ ràng tem nhãn (Badge):
+- 🏷️ **`Barcode (CODE_128)`** (màu xanh Cyan) nếu nhận diện từ mã vạch sọc.
+- 📱 **`QR Code`** (màu tím Violet) nếu nhận diện từ mã vuông QR.
+
