@@ -8,12 +8,14 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { CheckCircle2, RotateCcw, Package, Image as ImageIcon, Barcode, QrCode } from "lucide-react"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
 
 interface ConfirmPODialogProps {
   open: boolean
-  detectedPO: PhotoPackingItem
+  detectedPO: PhotoPackingSummary
   capturedImage: string
+  samplePhotoUrl?: string
+  stepNotes?: string
   codeMeta?: { format?: string; codeType?: "barcode" | "qrcode" } | null
   onConfirm: () => void
   onRetake: () => void
@@ -23,22 +25,26 @@ interface ConfirmPODialogProps {
  * Dialog xác nhận gửi ảnh lên hệ thống
  * Hiển thị thông tin PO, loại mã nhận diện (Barcode 1D vs QR Code),
  * ảnh vừa chụp (ở trên) và ảnh mẫu đối chiếu (ở dưới).
- * Ảnh được căn chỉnh vừa vặn với khung hiển thị (object-contain) để người dùng xem được toàn diện.
  */
 export function ConfirmPODialog({
   open,
   detectedPO,
   capturedImage,
+  samplePhotoUrl,
+  stepNotes,
   codeMeta,
   onConfirm,
   onRetake,
 }: ConfirmPODialogProps) {
-  const nextStep = detectedPO.currentStep + 1
-  // Lấy ảnh mẫu template tương ứng với bước hiện tại
-  const templateStep =
-    detectedPO.steps?.[detectedPO.currentStep] || detectedPO.steps?.[0]
+  const nextStep =
+    detectedPO.totalStep > 0
+      ? Math.min(detectedPO.totalStep, detectedPO.currentStep + 1)
+      : detectedPO.currentStep || 1
+
   const templateImageUrl =
-    templateStep?.photoUrl || templateStep?.thumbnailUrl
+    samplePhotoUrl ||
+    detectedPO.samplePhotoUrl ||
+    "https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80"
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onRetake()}>
@@ -65,19 +71,21 @@ export function ConfirmPODialog({
             <div className="flex items-start justify-between gap-2">
               <span className="text-slate-400 shrink-0">Mã PO</span>
               <span className="font-mono text-xs font-bold text-cyan-300 break-all text-right">
-                {detectedPO.po}
+                {detectedPO.pO}
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-slate-400 shrink-0">Sản phẩm</span>
               <span className="text-slate-200 font-medium truncate text-right">
-                {detectedPO.productName}
+                {detectedPO.productCode} {detectedPO.productName ? `• ${detectedPO.productName}` : ""}
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-400">Bước chụp</span>
               <span className="font-semibold text-amber-300">
-                Bước {nextStep} / {detectedPO.totalStep}
+                {detectedPO.totalStep > 0
+                  ? `Bước ${nextStep} / ${detectedPO.totalStep}`
+                  : `Bước ${detectedPO.currentStep || 1}`}
               </span>
             </div>
             <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
@@ -96,7 +104,7 @@ export function ConfirmPODialog({
             </div>
           </div>
 
-          {/* 1. Ảnh vừa chụp (ở trên) - căn chỉnh object-contain vừa toàn diện khung */}
+          {/* 1. Ảnh vừa chụp (ở trên) */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between px-1">
               <span className="text-[11px] font-semibold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -104,7 +112,7 @@ export function ConfirmPODialog({
                 Ảnh vừa chụp
               </span>
               <span className="text-[10px] text-slate-400 font-mono">
-                {detectedPO.po.includes(";") ? detectedPO.po.split(";")[0] : detectedPO.po}
+                {detectedPO.pO.includes(";") ? detectedPO.pO.split(";")[0] : detectedPO.pO}
               </span>
             </div>
             <div className="relative aspect-video rounded-xl overflow-hidden bg-black/95 border border-cyan-500/40 shadow-inner flex items-center justify-center p-1">
@@ -116,7 +124,7 @@ export function ConfirmPODialog({
             </div>
           </div>
 
-          {/* 2. Ảnh mẫu đối chiếu (ở dưới) - căn chỉnh object-contain vừa toàn diện khung */}
+          {/* 2. Ảnh mẫu đối chiếu (ở dưới) - lấy on-demand */}
           {templateImageUrl ? (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between px-1">
@@ -137,14 +145,12 @@ export function ConfirmPODialog({
               </div>
 
               {/* Hướng dẫn/Ghi chú của bước chụp nếu có */}
-              {templateStep && (
+              {(stepNotes || detectedPO.notes) && (
                 <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl px-3 py-2 text-[11px] text-slate-400 space-y-0.5">
                   <p className="font-semibold text-slate-300">
-                    {templateStep.title}
+                    Hướng dẫn kiểm tra bước {nextStep}
                   </p>
-                  {templateStep.description && (
-                    <p className="line-clamp-2">{templateStep.description}</p>
-                  )}
+                  <p className="line-clamp-2">{stepNotes || detectedPO.notes}</p>
                 </div>
               )}
             </div>

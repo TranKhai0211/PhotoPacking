@@ -2,16 +2,15 @@ import { useState } from "react"
 import OrderListPage from "@/pages/OrderListPage"
 import CameraPage from "@/pages/CameraPage"
 import ScanPage from "@/pages/ScanPage"
-import type { OrderItem } from "@/types/orderItem"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
 
 /**
  * App Component - Điều phối giữa Trang Danh sách Đơn hàng và Trang Chụp ảnh Camera
  */
 export default function App() {
   const [view, setView] = useState<"orders" | "camera" | "scan">("orders")
-  const [targetOrder, setTargetOrder] = useState<OrderItem | null>(null)
-  const [scannedPO, setScannedPO] = useState<PhotoPackingItem | null>(null)
+  const [targetOrder, setTargetOrder] = useState<PhotoPackingSummary | null>(null)
+  const [scannedPO, setScannedPO] = useState<PhotoPackingSummary | null>(null)
 
   const [scannedCodeMeta, setScannedCodeMeta] = useState<{
     format?: string
@@ -19,7 +18,7 @@ export default function App() {
   } | null>(null)
 
   // Mở camera để chụp hoặc chụp lại cho một đơn hàng cụ thể
-  const handleOpenOrderCamera = (order: OrderItem) => {
+  const handleOpenOrderCamera = (order: PhotoPackingSummary) => {
     setTargetOrder(order)
     setScannedPO(null)
     setScannedCodeMeta(null)
@@ -36,7 +35,7 @@ export default function App() {
 
   // PO được phát hiện từ Scan View → chuyển sang Camera View kèm PO data và loại mã
   const handlePODetected = (
-    po: PhotoPackingItem,
+    po: PhotoPackingSummary,
     codeMeta?: { format?: string; codeType?: "barcode" | "qrcode" }
   ) => {
     setScannedPO(po)

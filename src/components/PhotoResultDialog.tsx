@@ -8,14 +8,15 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { CheckCircle2, AlertCircle, RotateCcw, Check, RefreshCw } from "lucide-react"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
 
 interface PhotoResultDialogProps {
   open: boolean
   success: boolean
   message: string
   capturedImage: string
-  detectedPO: PhotoPackingItem
+  detectedPO: PhotoPackingSummary
+  samplePhotoUrl?: string
   onConfirmOK: () => void
   onRetake: () => void
   onRetryUpload?: () => void
@@ -32,15 +33,17 @@ export function PhotoResultDialog({
   message,
   capturedImage,
   detectedPO,
+  samplePhotoUrl,
   onConfirmOK,
   onRetake,
   onRetryUpload,
 }: PhotoResultDialogProps) {
-  const nextStep = detectedPO.currentStep + 1
-  // Lấy ảnh mẫu template từ bước hiện tại trong mock data
-  const templateStep = detectedPO.steps[detectedPO.currentStep]
-  const templateImageUrl =
-    templateStep?.photoUrl || templateStep?.thumbnailUrl
+  const nextStep =
+    detectedPO.totalStep > 0
+      ? Math.min(detectedPO.totalStep, detectedPO.currentStep + 1)
+      : detectedPO.currentStep || 1
+
+  const templateImageUrl = samplePhotoUrl || detectedPO.samplePhotoUrl
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onRetake()}>
@@ -62,7 +65,11 @@ export function PhotoResultDialog({
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-400 mt-0.5">
                 {success
-                  ? `Bước ${nextStep}/${detectedPO.totalStep} • PO ${detectedPO.po}`
+                  ? `${
+                      detectedPO.totalStep > 0
+                        ? `Bước ${nextStep}/${detectedPO.totalStep}`
+                        : `Bước ${nextStep}`
+                    } • PO ${detectedPO.pO}`
                   : "Đã xảy ra lỗi khi tải ảnh lên hệ thống"}
               </DialogDescription>
             </div>
@@ -100,67 +107,67 @@ export function PhotoResultDialog({
                 </div>
               </div>
 
-              {/* Ảnh mẫu template (đặt dưới để đối chiếu) */}
+              {/* Ảnh mẫu đối chiếu (đặt dưới) */}
               {templateImageUrl && (
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-1.5 px-1">
                     <span className="text-[11px] font-semibold text-amber-300 uppercase tracking-wider">
-                      Ảnh mẫu đối chiếu
+                      Ảnh mẫu đối chiếu (Template)
                     </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">
-                      MẪU BƯỚC {nextStep}
-                    </span>
+                    <div className="flex-1 h-px bg-slate-800" />
                   </div>
                   <div className="relative aspect-video rounded-xl overflow-hidden bg-black/95 border border-amber-500/40 shadow-inner flex items-center justify-center p-1">
                     <img
                       src={templateImageUrl}
-                      alt="Ảnh mẫu"
+                      alt="Ảnh mẫu đối chiếu"
                       className="w-full h-full object-contain rounded-lg"
                     />
                   </div>
-                </div>
-              )}
-
-              {/* Thông tin bước kiểm tra */}
-              {templateStep && (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-slate-400 space-y-1">
-                  <p className="font-medium text-slate-300">
-                    {templateStep.title}
-                  </p>
-                  <p>{templateStep.description}</p>
                 </div>
               )}
             </>
           )}
         </div>
 
-        <DialogFooter className="flex flex-row gap-2 pt-1">
-          <Button
-            onClick={onRetake}
-            variant="outline"
-            className="flex-1 border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200"
-          >
-            <RotateCcw className="w-4 h-4 mr-1.5" />
-            Chụp lại
-          </Button>
+        <DialogFooter className="flex flex-row gap-2 pt-2">
           {success ? (
-            <Button
-              onClick={onConfirmOK}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
-            >
-              <Check className="w-4 h-4 mr-1.5" />
-              Xác nhận OK
-            </Button>
-          ) : (
-            onRetryUpload && (
+            <>
               <Button
-                onClick={onRetryUpload}
-                className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-medium"
+                onClick={onRetake}
+                variant="outline"
+                className="flex-1 border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 h-11"
               >
-                <RefreshCw className="w-4 h-4 mr-1.5" />
-                Thử lại
+                <RotateCcw className="w-4 h-4 mr-1.5" />
+                Chụp lại
               </Button>
-            )
+              <Button
+                onClick={onConfirmOK}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium h-11 shadow-lg shadow-emerald-950/50"
+              >
+                <Check className="w-4 h-4 mr-1.5" />
+                Xác nhận OK
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                onClick={onRetake}
+                variant="outline"
+                className="flex-1 border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 h-11"
+              >
+                <RotateCcw className="w-4 h-4 mr-1.5" />
+                Chụp lại
+              </Button>
+              {onRetryUpload && (
+                <Button
+                  onClick={onRetryUpload}
+                  className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-medium h-11"
+                >
+                  <RefreshCw className="w-4 h-4 mr-1.5" />
+                  Thử lại
+                </Button>
+              )}
+            </>
           )}
         </DialogFooter>
       </DialogContent>

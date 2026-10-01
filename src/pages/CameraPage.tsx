@@ -1,8 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react"
-// [THAM KHẢO QRCODE] - Thư viện jsQR trước đây dùng để đọc mã QR 2D:
-// import jsQR from "jsqr"
 import { scanBarcodeFromCanvas } from "@/services/barcodeScanner"
-import { SCAN_CONFIG } from "@/config/scanConfig"
 import {
   RotateCcw,
   AlertCircle,
@@ -24,14 +21,15 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { lookupPOByBarcode, lookupPOForOrder } from "@/services/poLookup"
+import { processScannedBarcodeResult } from "@/services/poLookup"
 import { submitPhoto, confirmStep } from "@/services/photoPackingApi"
 import type { SubmitPhotoResult, ConfirmStepResult } from "@/services/photoPackingApi"
+import { fetchStepItemApi } from "@/services/photoPackingService"
 import { ConfirmPODialog } from "@/components/ConfirmPODialog"
 import { PhotoResultDialog } from "@/components/PhotoResultDialog"
 import { NotifyResultDialog } from "@/components/NotifyResultDialog"
-import type { OrderItem } from "@/types/orderItem"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
+import type { PhotoPackingItem } from "@/types/photoPackingItem"
 
 /**
  * Các bước trong luồng chụp ảnh theo sơ đồ flowchart:
@@ -47,8 +45,8 @@ type CameraFlowStep =
   | "done"        // Hoàn tất, hiển thị thông báo thành công
 
 interface CameraPageProps {
-  targetOrder?: OrderItem | null
-  scannedPO?: PhotoPackingItem | null
+  targetOrder?: PhotoPackingSummary | null
+  scannedPO?: PhotoPackingSummary | null
   scannedCodeMeta?: { format?: string; codeType?: "barcode" | "qrcode" } | null
   onBack: () => void
 }
@@ -100,9 +98,14 @@ export default function CameraPage({
   // Sample photo dialog
   const [isSampleDialogOpen, setIsSampleDialogOpen] = useState(false)
 
+  // Chi tiết bước chụp và ảnh mẫu đối chiếu (lấy on-demand từ API)
+  const [activeStepItem, setActiveStepItem] = useState<PhotoPackingItem | null>(null)
+
   // === Luồng chụp ảnh theo sơ đồ flowchart ===
   const [flowStep, setFlowStep] = useState<CameraFlowStep>("preview")
-  const [detectedPO, setDetectedPO] = useState<PhotoPackingItem | null>(null)
+  const [detectedPO, setDetectedPO] = useState<PhotoPackingSummary | null>(
+    scannedPO || targetOrder || null
+  )
   const [apiResult, setApiResult] = useState<SubmitPhotoResult | null>(null)
   const [confirmResult, setConfirmResult] = useState<ConfirmStepResult | null>(null)
   const [scanErrorMessage, setScanErrorMessage] = useState<string | null>(null)
@@ -110,14 +113,32 @@ export default function CameraPage({
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const isCameraActiveRef = useRef(false)
+  const cameraRequestIdRef = useRef(0)
 
-  // Ảnh mẫu của đơn hàng (nếu có)
+  // Tải thông tin bước và ảnh mẫu đối chiếu on-demand từ API
+  useEffect(() => {
+    const currentPO = detectedPO || scannedPO || targetOrder
+    if (currentPO) {
+      const nextStep =
+        currentPO.totalStep > 0
+          ? Math.min(currentPO.totalStep, currentPO.currentStep + 1)
+          : currentPO.currentStep || 1
+
+      fetchStepItemApi(currentPO.pO, nextStep).then((item) => {
+        if (item) setActiveStepItem(item)
+      })
+    }
+  }, [detectedPO, scannedPO, targetOrder])
+
+  // Ảnh mẫu đối chiếu (lấy từ activeStepItem vừa tải hoặc fallback ảnh mẫu chất lượng cao)
   const samplePhotoUrl =
-    targetOrder?.photoUrls?.[0] ||
-    scannedPO?.steps?.[scannedPO.currentStep]?.thumbnailUrl ||
-    ((targetOrder || scannedPO)
-      ? "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&auto=format&fit=crop&q=80"
-      : null)
+    activeStepItem?.samplePhotoUrl ||
+    detectedPO?.samplePhotoUrl ||
+    targetOrder?.samplePhotoUrl ||
+    scannedPO?.samplePhotoUrl ||
+    "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&auto=format&fit=crop&q=80"
 
   // Cập nhật capabilities của camera (flash, zoom, exposure)
   const inspectTrackCapabilities = useCallback((track: MediaStreamTrack) => {
@@ -159,12 +180,28 @@ export default function CameraPage({
       mode: "environment" | "user" = facingMode,
       resKey: ResolutionKey = resolution
     ) => {
+      const requestId = ++cameraRequestIdRef.current
+      isCameraActiveRef.current = true
+
       try {
         setCameraError(null)
         setIsFlashOn(false)
 
-        if (stream) {
-          stream.getTracks().forEach((track) => track.stop())
+        // Dừng và giải phóng stream cũ nếu đang hoạt động
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => {
+            try {
+              track.enabled = false
+              track.stop()
+            } catch {}
+          })
+          streamRef.current = null
+        }
+        if (videoRef.current) {
+          try {
+            videoRef.current.pause()
+          } catch {}
+          videoRef.current.srcObject = null
         }
 
         const resConfig = RESOLUTION_CONFIG[resKey]
@@ -177,6 +214,18 @@ export default function CameraPage({
           audio: false,
         })
 
+        // Nếu người dùng đã đóng trang hoặc có một request mở camera mới hơn
+        if (!isCameraActiveRef.current || requestId !== cameraRequestIdRef.current) {
+          newStream.getTracks().forEach((track) => {
+            try {
+              track.enabled = false
+              track.stop()
+            } catch {}
+          })
+          return
+        }
+
+        streamRef.current = newStream
         setStream(newStream)
 
         const videoTrack = newStream.getVideoTracks()[0]
@@ -188,22 +237,70 @@ export default function CameraPage({
           videoRef.current.srcObject = newStream
         }
       } catch (err) {
+        if (!isCameraActiveRef.current || requestId !== cameraRequestIdRef.current) {
+          return
+        }
         console.error("Camera access error:", err)
         setCameraError(
           "Không thể mở camera. Vui lòng kiểm tra quyền truy cập camera trong trình duyệt hoặc sử dụng tính năng tải ảnh bên dưới."
         )
       }
     },
-    [facingMode, resolution, stream, inspectTrackCapabilities]
+    [facingMode, resolution, inspectTrackCapabilities]
   )
 
-  // Dừng Camera
+  // Dừng Camera và giải phóng toàn bộ phần cứng thiết bị (tắt đèn camera)
   const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop())
-      setStream(null)
+    isCameraActiveRef.current = false
+    cameraRequestIdRef.current++
+
+    // 1. Tắt torch (flash) và giải phóng mọi media track trong streamRef
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        try {
+          const caps = (track.getCapabilities?.() || {}) as any
+          if (caps.torch) {
+            (track.applyConstraints as any)({
+              advanced: [{ torch: false }],
+            }).catch(() => {})
+          }
+        } catch {}
+        try {
+          track.enabled = false
+          track.stop()
+        } catch {}
+      })
+      streamRef.current = null
     }
-  }, [stream])
+
+    // 2. Ngắt kết nối và giải phóng video element
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause()
+      } catch {}
+      if (videoRef.current.srcObject) {
+        try {
+          const srcStream = videoRef.current.srcObject as MediaStream
+          srcStream.getTracks?.().forEach((track) => {
+            try {
+              track.enabled = false
+              track.stop()
+            } catch {}
+          })
+        } catch {}
+        videoRef.current.srcObject = null
+      }
+    }
+
+    setStream(null)
+    setIsFlashOn(false)
+  }, [])
+
+  // Đóng trang Camera: Dừng triệt để camera phần cứng rồi mới quay về
+  const handleClose = useCallback(() => {
+    stopCamera()
+    onBack()
+  }, [stopCamera, onBack])
 
   // Chuyển camera trước / sau
   const toggleCameraFacing = () => {
@@ -211,6 +308,7 @@ export default function CameraPage({
     setFacingMode(nextMode)
     setZoom(1)
     setExposure(0)
+    setIsFlashOn(false)
     startCamera(nextMode, resolution)
   }
 
@@ -292,12 +390,19 @@ export default function CameraPage({
 
   // Effect khởi động và dọn dẹp camera
   useEffect(() => {
+    isCameraActiveRef.current = true
     setCapturedImage(null)
     setFlowStep("preview")
-    setDetectedPO(null)
+    setDetectedPO(scannedPO || targetOrder || null)
     startCamera(facingMode, resolution)
 
+    const handleBeforeUnload = () => {
+      stopCamera()
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload)
       stopCamera()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -309,7 +414,7 @@ export default function CameraPage({
     }
   }, [stream, capturedImage])
 
-  // Quét mã vạch Barcode từ canvas ảnh chụp → Detect PO → Chuyển sang bước Confirm
+  // Quét mã Barcode & QR Code từ canvas ảnh chụp → Detect PO → Chuyển sang bước Confirm
   const processQRCode = (canvas: HTMLCanvasElement) => {
     setFlowStep("scanning")
     setScanErrorMessage(null)
@@ -317,59 +422,53 @@ export default function CameraPage({
     // Đợi 700ms để hiển thị hiệu ứng laser quét mã sinh động
     setTimeout(async () => {
       try {
-        let foundPO: PhotoPackingItem | null = null
+        // Luôn quét đồng thời cả Barcode 1D và QR Code 2D ("both")
+        const scanResult = await scanBarcodeFromCanvas(canvas, "both")
 
-        /* =====================================================================
-         * 1. ĐỌC MÃ THEO CỜ CẤU HÌNH (SCAN_CONFIG.ACTIVE_MODE: both | barcode | qrcode)
-         * ===================================================================== */
-        const scanResult = await scanBarcodeFromCanvas(canvas, SCAN_CONFIG.ACTIVE_MODE)
         if (scanResult?.text?.trim()) {
-          foundPO = lookupPOByBarcode(scanResult.text.trim())
-          if (foundPO) {
-            setDetectedCodeMeta({
-              format: scanResult.format,
-              codeType: scanResult.codeType,
-            })
+          // Bắt mã đầu tiên phát hiện được và xử lý theo quy tắc nghiệp vụ
+          const processed = processScannedBarcodeResult(scanResult)
+
+          if (!processed.success) {
+            // Mã không hợp lệ (ví dụ: QR không chứa PO 12 ký tự số hoặc barcode không khớp)
+            setCapturedImage(null)
+            setFlowStep("preview")
+            setScanErrorMessage(
+              processed.errorMessage || "Mã quét không hợp lệ. Vui lòng thử lại."
+            )
+            setTimeout(() => setScanErrorMessage(null), 5000)
+            return
           }
+
+          // Nhận diện mã hợp lệ thành công
+          setDetectedCodeMeta({
+            format: processed.format,
+            codeType: processed.codeType,
+          })
+          setDetectedPO(processed.poSummary!)
+          setFlowStep("confirm-po")
+          return
         }
 
-        /* =====================================================================
-         * 2. [MÃ NGUỒN THAM KHẢO] - ĐỌC QRCODE BẰNG JSQR TRƯỚC ĐÂY:
-         * Nếu muốn chỉ đọc mã QR 2D thay vì Barcode 1D, bạn có thể:
-         *
-         * const ctx = canvas.getContext("2d")
-         * if (ctx) {
-         *   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-         *   const code = jsQR(imageData.data, imageData.width, imageData.height, {
-         *     inversionAttempts: "attemptBoth",
-         *   })
-         *   if (code?.data?.trim()) {
-         *     foundPO = lookupPOByBarcode(code.data.trim())
-         *   }
-         * }
-         * ===================================================================== */
-
-        // 3. Fallback: dùng PO đã được chọn trước đó (từ Scan View hoặc PO card)
-        if (!foundPO) {
-          foundPO = scannedPO || (targetOrder ? lookupPOForOrder(targetOrder) : null)
-        }
-
-        if (foundPO) {
-          setDetectedPO(foundPO)
+        // Trường hợp không phát hiện mã nào trong ảnh chụp:
+        // Nếu trước đó đã có đơn hàng được chọn từ trước (targetOrder hoặc scannedPO)
+        let fallbackPO = scannedPO || targetOrder || null
+        if (fallbackPO) {
+          setDetectedPO(fallbackPO)
           setFlowStep("confirm-po")
         } else {
-          // Không tìm thấy PO nào → quay lại preview để chụp lại
+          // Không tìm thấy mã nào và cũng không có đơn hàng chọn sẵn
           setCapturedImage(null)
           setFlowStep("preview")
           setScanErrorMessage(
-            "Không phát hiện mã vạch Barcode PO trong ảnh. Vui lòng căn chỉnh rõ nét và chụp lại."
+            "Không phát hiện mã Barcode hoặc QR Code trong ảnh. Vui lòng căn chỉnh rõ nét và chụp lại."
           )
           setTimeout(() => setScanErrorMessage(null), 5000)
         }
       } catch {
         setCapturedImage(null)
         setFlowStep("preview")
-        setScanErrorMessage("Lỗi khi phân tích mã vạch. Vui lòng thử lại.")
+        setScanErrorMessage("Lỗi khi phân tích mã. Vui lòng thử lại.")
         setTimeout(() => setScanErrorMessage(null), 4000)
       }
     }, 700)
@@ -481,7 +580,7 @@ export default function CameraPage({
   const handleRetake = () => {
     setCapturedImage(null)
     setFlowStep("preview")
-    setDetectedPO(null)
+    setDetectedPO(scannedPO || targetOrder || null)
     setApiResult(null)
     setConfirmResult(null)
     setScanErrorMessage(null)
@@ -501,9 +600,13 @@ export default function CameraPage({
     setFlowStep("uploading")
 
     try {
-      const nextStep = detectedPO.currentStep + 1
+      const nextStep =
+        detectedPO.totalStep > 0
+          ? Math.min(detectedPO.totalStep, detectedPO.currentStep + 1)
+          : detectedPO.currentStep || 1
+
       const result = await submitPhoto({
-        po: detectedPO.po,
+        po: detectedPO.pO,
         stepNumber: nextStep,
         imageBase64: capturedImage,
         productName: detectedPO.productName,
@@ -525,9 +628,13 @@ export default function CameraPage({
     setFlowStep("confirming")
 
     try {
-      const nextStep = detectedPO.currentStep + 1
+      const nextStep =
+        detectedPO.totalStep > 0
+          ? Math.min(detectedPO.totalStep, detectedPO.currentStep + 1)
+          : detectedPO.currentStep || 1
+
       const result = await confirmStep({
-        po: detectedPO.po,
+        po: detectedPO.pO,
         stepNumber: nextStep,
       })
       if (result.success) {
@@ -601,15 +708,15 @@ export default function CameraPage({
           <div className="size-10" />
         )}
 
-        {/* Thông tin ở giữa (Giữ nguyên) */}
+        {/* Thông tin ở giữa */}
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-1.5">
             <ScanLine className="w-4 h-4 text-cyan-400 animate-pulse" />
             <span className="font-semibold text-sm tracking-wide text-slate-200">
               {targetOrder
-                ? `Đơn #${targetOrder.orderNumber}`
+                ? `Đơn #${targetOrder.pO}`
                 : scannedPO
-                ? `PO #${scannedPO.po.slice(-6)}`
+                ? `PO #${scannedPO.pO.slice(-6)}`
                 : capturedImage
                 ? flowStep === "scanning"
                   ? "Đang phân tích ảnh..."
@@ -620,9 +727,13 @@ export default function CameraPage({
           {(targetOrder || scannedPO) && (
             <span className="text-[11px] text-cyan-300">
               {targetOrder
-                ? `${targetOrder.product} • Step ${targetOrder.stepCurrent}/${targetOrder.stepTotal}`
+                ? `${targetOrder.productCode} • Step ${targetOrder.currentStep}/${
+                    targetOrder.totalStep || 1
+                  }`
                 : scannedPO
-                ? `${scannedPO.productName} • Step ${scannedPO.currentStep + 1}/${scannedPO.totalStep}`
+                ? `${scannedPO.productCode} • Step ${scannedPO.currentStep + 1}/${
+                    scannedPO.totalStep || 1
+                  }`
                 : ""}
             </span>
           )}
@@ -632,7 +743,7 @@ export default function CameraPage({
         <Button
           variant="ghost"
           size="icon"
-          onClick={onBack}
+          onClick={handleClose}
           className="text-white hover:bg-white/15 rounded-full size-10"
           title="Đóng camera"
         >
@@ -825,13 +936,7 @@ export default function CameraPage({
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
                       </span>
-                      <span>
-                        {SCAN_CONFIG.ACTIVE_MODE === "barcode"
-                          ? "Đang nhận diện mã vạch Barcode..."
-                          : SCAN_CONFIG.ACTIVE_MODE === "qrcode"
-                          ? "Đang nhận diện mã QR Code..."
-                          : "Đang nhận diện mã Barcode / QR Code..."}
-                      </span>
+                      <span>Đang nhận diện mã Barcode / QR Code...</span>
                     </div>
                   </div>
                 </div>
@@ -925,13 +1030,13 @@ export default function CameraPage({
               </DialogTitle>
               {targetOrder && (
                 <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 font-semibold">
-                  Đơn #{targetOrder.orderNumber}
+                  Đơn #{targetOrder.pO}
                 </span>
               )}
             </div>
             {targetOrder && (
               <DialogDescription className="text-xs text-slate-400">
-                Sản phẩm: <span className="text-slate-200 font-medium">{targetOrder.product}</span> • {targetOrder.packageType}
+                Sản phẩm: <span className="text-slate-200 font-medium">{targetOrder.productCode}</span> • {targetOrder.type || "Đóng gói tiêu chuẩn"}
               </DialogDescription>
             )}
           </DialogHeader>
@@ -984,6 +1089,8 @@ export default function CameraPage({
           open={flowStep === "confirm-po"}
           detectedPO={detectedPO}
           capturedImage={capturedImage}
+          samplePhotoUrl={samplePhotoUrl || undefined}
+          stepNotes={activeStepItem?.notes}
           codeMeta={detectedCodeMeta}
           onConfirm={handleConfirmPO}
           onRetake={handleRetake}
@@ -998,6 +1105,7 @@ export default function CameraPage({
           message={apiResult.message}
           capturedImage={capturedImage}
           detectedPO={detectedPO}
+          samplePhotoUrl={samplePhotoUrl || undefined}
           onConfirmOK={handleConfirmResult}
           onRetake={handleRetake}
           onRetryUpload={!apiResult.success ? handleRetryUpload : undefined}
@@ -1010,7 +1118,7 @@ export default function CameraPage({
           open={flowStep === "done"}
           detectedPO={detectedPO}
           message={confirmResult.message}
-          onBackToList={onBack}
+          onBackToList={handleClose}
         />
       )}
     </div>

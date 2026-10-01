@@ -4,14 +4,19 @@ export interface PhotoPackingSummary {
     productName: string;
     group: string;
     creator: string;
-    createTime: Date;
+    createTime: Date | string;
     updator: string;
-    updatedTime: Date;
+    updatedTime: Date | string;
     type: string;
     productKey: string;
     totalStep: number;
+    currentStep: number;
     notes: string;
     statusId: number;
+    /** Danh sách URL ảnh đã chụp (được lấy theo nhu cầu từ API khi mở dialog xem ảnh hoặc trong CameraPage) */
+    photoUrls?: string[];
+    /** Ảnh mẫu template đối chiếu */
+    samplePhotoUrl?: string;
 }
 
 const STATUS_TEXT: Record<number, string> = {
@@ -25,4 +30,4 @@ const getStatusText = (statusId: number): string => {
     return STATUS_TEXT[statusId] || "Không xác định";
 };
 
-export { getStatusText };
+export { STATUS_TEXT, getStatusText };

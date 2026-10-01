@@ -1,25 +1,23 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-// [THAM KHẢO QRCODE] - Thư viện jsQR trước đây dùng để đọc mã QR 2D:
-// import jsQR from "jsqr"
-import { X, ScanLine, Barcode, QrCode, Layers } from "lucide-react"
+import { X, ScanLine, Layers, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { lookupPOByBarcode } from "@/services/poLookup"
+import { processScannedBarcodeResult } from "@/services/poLookup"
 import { scanBarcodeFromCanvas } from "@/services/barcodeScanner"
-import { SCAN_CONFIG, type ScanMode } from "@/config/scanConfig"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
 
 interface ScanPageProps {
   onPODetected: (
-    po: PhotoPackingItem,
+    po: PhotoPackingSummary,
     codeMeta?: { format?: string; codeType?: "barcode" | "qrcode" }
   ) => void
   onBack: () => void
 }
 
 /**
- * Trang quét mã vạch Barcode & QR Code real-time
- * Tự động đồng bộ với cờ cấu hình SCAN_CONFIG.ACTIVE_MODE ("both" | "barcode" | "qrcode")
- * Kèm thanh chuyển đổi chế độ UI Switcher trực quan
+ * Trang quét mã vạch Barcode (1D) & QR Code (2D) real-time
+ * Chế độ duy nhất: Đọc cả hai (Both).
+ * Bắt mã đầu tiên phát hiện được; nếu là QR Code sẽ tách chuỗi theo dấu ";" và lấy PO là phần đầu.
+ * Nếu PO không phải chuỗi 12 ký tự số thì trả lỗi.
  */
 export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -28,138 +26,144 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
   const scanIntervalRef = useRef<number | null>(null)
   const isDetectedRef = useRef(false)
   const isProcessingFrameRef = useRef(false)
+  const cooldownUntilRef = useRef<number>(0)
   const onPODetectedRef = useRef(onPODetected)
 
-  // Chế độ quét hiện tại (mặc định lấy từ cờ SCAN_CONFIG.ACTIVE_MODE)
-  const [scanMode, setScanMode] = useState<ScanMode>(SCAN_CONFIG.ACTIVE_MODE)
-  const scanModeRef = useRef<ScanMode>(scanMode)
-
+  const [isDetected, setIsDetected] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
-  const [scanStatus, setScanStatus] = useState("Đang khởi động camera...")
+  const [detectedMessage, setDetectedMessage] = useState<string | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
 
-  // Cập nhật ref khi callback hoặc mode thay đổi
+  // Cập nhật ref khi callback thay đổi
   useEffect(() => {
     onPODetectedRef.current = onPODetected
   }, [onPODetected])
 
-  useEffect(() => {
-    scanModeRef.current = scanMode
-    if (scanMode === "barcode") {
-      setScanStatus("Hướng camera vào dải mã vạch Barcode (Code 128, Code 39...)")
-    } else if (scanMode === "qrcode") {
-      setScanStatus("Hướng camera vào mã vuông QR Code trên phiếu PO...")
-    } else {
-      setScanStatus("Hướng camera vào mã vạch Barcode hoặc QR Code...")
-    }
-  }, [scanMode])
+  // Trạng thái hiển thị hướng dẫn (derive từ state)
+  const scanStatus =
+    detectedMessage || "Hướng camera vào mã vạch Barcode hoặc QR Code..."
 
-  // Dọn dẹp tài nguyên
+  // Dọn dẹp tài nguyên camera và interval
   const stopAll = useCallback(() => {
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current)
       scanIntervalRef.current = null
     }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current.getTracks().forEach((track) => {
+        try {
+          track.enabled = false
+          track.stop()
+        } catch {}
+      })
       streamRef.current = null
+    }
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause()
+      } catch {}
+      if (videoRef.current.srcObject) {
+        try {
+          const srcStream = videoRef.current.srcObject as MediaStream
+          srcStream.getTracks?.().forEach((t) => {
+            try {
+              t.enabled = false
+              t.stop()
+            } catch {}
+          })
+        } catch {}
+        videoRef.current.srcObject = null
+      }
     }
   }, [])
 
-  // Khởi tạo camera + bắt đầu quét liên tục
+  const handleClose = useCallback(() => {
+    stopAll()
+    onBack()
+  }, [stopAll, onBack])
+
+  // Khởi động Camera và bộ quét Barcode & QR Code liên tục
   useEffect(() => {
     let mounted = true
 
     async function init() {
       try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
           audio: false,
         })
 
         if (!mounted) {
-          newStream.getTracks().forEach((t) => t.stop())
+          stream.getTracks().forEach((track) => track.stop())
           return
         }
 
-        streamRef.current = newStream
+        streamRef.current = stream
         if (videoRef.current) {
-          videoRef.current.srcObject = newStream
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
         }
 
-        // Quét liên tục mỗi 200ms
+        // Vòng lặp quét frame định kỳ mỗi 200ms
         scanIntervalRef.current = window.setInterval(async () => {
-          if (
-            !videoRef.current ||
-            !canvasRef.current ||
-            isDetectedRef.current ||
-            isProcessingFrameRef.current
-          )
-            return
+          if (isDetectedRef.current || isProcessingFrameRef.current) return
+          if (!videoRef.current || !canvasRef.current) return
 
           const video = videoRef.current
+          const canvas = canvasRef.current
           if (video.readyState !== video.HAVE_ENOUGH_DATA) return
 
-          const canvas = canvasRef.current
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          const ctx = canvas.getContext("2d")
-          if (!ctx) return
-
-          ctx.drawImage(video, 0, 0)
-
           isProcessingFrameRef.current = true
+
           try {
-            /* =========================================================================
-             * ĐỌC MÃ THEO CHẾ ĐỘ (Barcode 1D, QR Code 2D hoặc Cả hai)
-             * ========================================================================= */
-            const currentMode = scanModeRef.current
-            const scanResult = await scanBarcodeFromCanvas(canvas, currentMode)
+            canvas.width = video.videoWidth
+            canvas.height = video.videoHeight
+            const ctx = canvas.getContext("2d", { willReadFrequently: true })
+            if (!ctx) return
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+            // Luôn quét đồng thời cả Barcode 1D và QR Code 2D ("both")
+            const scanResult = await scanBarcodeFromCanvas(canvas, "both")
 
             if (scanResult && scanResult.text.trim()) {
-              const barcodeValue = scanResult.text.trim()
-              const po = lookupPOByBarcode(barcodeValue)
-
-              if (po) {
-                // PO tìm thấy → dừng quét, chuyển sang Camera View kèm metadata
-                isDetectedRef.current = true
-                const tagLabel =
-                  scanResult.codeType === "qrcode"
-                    ? "QR Code"
-                    : scanResult.format || "Barcode"
-                setScanStatus(`Đã nhận diện [${tagLabel}]: PO ${po.po}`)
-                setTimeout(() => {
-                  onPODetectedRef.current(po, {
-                    format: scanResult.format,
-                    codeType: scanResult.codeType,
-                  })
-                }, 500)
-              } else {
-                // Barcode không khớp PO nào
-                setLastError(
-                  `Mã "${barcodeValue.length > 25 ? barcodeValue.slice(0, 25) + "..." : barcodeValue}" không khớp PO nào`
-                )
-                setTimeout(() => setLastError(null), 3000)
+              // Nếu đang trong thời gian cooldown sau khi báo lỗi thì bỏ qua frame này
+              if (Date.now() < cooldownUntilRef.current) {
+                return
               }
-            }
 
-            /* =========================================================================
-             * [MÃ NGUỒN THAM KHẢO] - ĐỌC QRCODE BẰNG JSQR TRƯỚC ĐÂY:
-             * Nếu muốn dùng thuần jsQR cho mọi trường hợp, bạn có thể tham khảo:
-             *
-             * const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-             * const code = jsQR(imageData.data, imageData.width, imageData.height, {
-             *   inversionAttempts: "attemptBoth",
-             * })
-             * if (code?.data?.trim()) {
-             *   const po = lookupPOByBarcode(code.data.trim())
-             *   if (po) onPODetectedRef.current(po)
-             * }
-             * ========================================================================= */
+              // Xử lý mã đầu tiên bắt được theo quy tắc nghiệp vụ
+              const processed = processScannedBarcodeResult(scanResult)
+
+              if (!processed.success) {
+                // Trả lỗi nếu QR không có PO 12 số hoặc barcode không khớp PO
+                setLastError(processed.errorMessage || "Mã quét không hợp lệ")
+                // Đặt cooldown 2.5s để người dùng kịp đọc thông báo lỗi và tránh spam
+                cooldownUntilRef.current = Date.now() + 2500
+                setTimeout(() => setLastError(null), 3500)
+                return
+              }
+
+              // Mã hợp lệ: Đã tìm thấy PO thành công
+              const po = processed.poSummary!
+              isDetectedRef.current = true
+              setIsDetected(true)
+              const tagLabel =
+                processed.codeType === "qrcode"
+                  ? "QR Code"
+                  : processed.format || "Barcode"
+              setDetectedMessage(`Đã nhận diện [${tagLabel}]: PO ${po.pO}`)
+              setTimeout(() => {
+                onPODetectedRef.current(po, {
+                  format: processed.format,
+                  codeType: processed.codeType,
+                })
+              }, 500)
+            }
           } catch {
             // Bỏ qua lỗi quét frame này
           } finally {
@@ -177,7 +181,13 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
 
     init()
 
+    const handleBeforeUnload = () => {
+      stopAll()
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload)
       mounted = false
       stopAll()
     }
@@ -190,28 +200,23 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
       {/* Header */}
       <header className="z-20 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/85 via-black/50 to-transparent">
         <div className="size-10 flex items-center justify-center">
-          {scanMode === "qrcode" ? (
-            <QrCode className="w-5 h-5 text-purple-400" />
-          ) : scanMode === "barcode" ? (
-            <Barcode className="w-5 h-5 text-cyan-400" />
-          ) : (
-            <Layers className="w-5 h-5 text-emerald-400" />
-          )}
+          <Layers className="w-5 h-5 text-emerald-400" />
         </div>
-        <div className="flex items-center gap-1.5">
-          <ScanLine className="w-4 h-4 text-cyan-400 animate-pulse" />
-          <span className="font-semibold text-sm tracking-wide text-slate-200">
-            {scanMode === "barcode"
-              ? "Quét mã vạch Barcode"
-              : scanMode === "qrcode"
-              ? "Quét mã QR Code"
-              : "Quét Barcode & QR Code"}
+        <div className="flex flex-col items-center">
+          <div className="flex items-center gap-1.5">
+            <ScanLine className="w-4 h-4 text-cyan-400 animate-pulse" />
+            <span className="font-semibold text-sm tracking-wide text-slate-200">
+              Quét Barcode & QR Code
+            </span>
+          </div>
+          <span className="text-[10px] text-emerald-400 font-medium">
+            Đọc cả hai (Barcode 1D & QR Code 2D)
           </span>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          onClick={onBack}
+          onClick={handleClose}
           className="text-white hover:bg-white/15 rounded-full size-10"
           title="Đóng"
         >
@@ -219,53 +224,11 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
         </Button>
       </header>
 
-      {/* Thanh chuyển đổi chế độ quét (UI Switcher) */}
-      {SCAN_CONFIG.ENABLE_UI_SWITCHER && (
-        <div className="z-20 px-3 py-1.5 bg-black/60 backdrop-blur-md flex justify-center border-b border-white/5">
-          <div className="inline-flex p-1 bg-slate-900/90 border border-slate-800 rounded-xl gap-1 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setScanMode("both")}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                scanMode === "both"
-                  ? "bg-gradient-to-r from-emerald-500 to-cyan-500 text-black font-bold shadow-md"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Cả hai
-            </button>
-            <button
-              type="button"
-              onClick={() => setScanMode("barcode")}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                scanMode === "barcode"
-                  ? "bg-cyan-500 text-black font-bold shadow-md shadow-cyan-500/20"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <Barcode className="w-3.5 h-3.5" />
-              Barcode 1D
-            </button>
-            <button
-              type="button"
-              onClick={() => setScanMode("qrcode")}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                scanMode === "qrcode"
-                  ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/20"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              QR Code 2D
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Toast lỗi khi barcode không khớp PO */}
+      {/* Toast thông báo lỗi khi PO không hợp lệ hoặc không phải 12 chữ số */}
       {lastError && (
-        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-30 bg-red-950/90 backdrop-blur border border-red-500/40 text-red-300 text-xs px-4 py-2 rounded-full shadow-lg text-center max-w-[90%]">
-          {lastError}
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 bg-red-950/95 backdrop-blur border border-red-500/60 text-red-200 text-xs px-4 py-2.5 rounded-xl shadow-2xl text-center max-w-[92%] flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150">
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+          <span className="font-medium leading-snug">{lastError}</span>
         </div>
       )}
 
@@ -296,69 +259,28 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
             />
           )}
 
-          {/* Viewfinder hướng dẫn căn chỉnh tự động theo chế độ */}
+          {/* Viewfinder hướng dẫn căn chỉnh cho cả Barcode và QR Code */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-            <div
-              className={`relative transition-all duration-300 ${
-                scanMode === "barcode"
-                  ? "w-80 h-40 max-w-[88vw] max-h-[46vw]"
-                  : scanMode === "qrcode"
-                  ? "w-64 h-64 max-w-[70vw] max-h-[70vw]"
-                  : "w-72 h-52 max-w-[82vw] max-h-[58vw]"
-              }`}
-            >
-              {/* 4 góc viền viewfinder */}
-              <div
-                className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-xl transition-colors ${
-                  scanMode === "qrcode" ? "border-purple-400" : "border-cyan-400"
-                }`}
-              />
-              <div
-                className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-xl transition-colors ${
-                  scanMode === "qrcode" ? "border-purple-400" : "border-cyan-400"
-                }`}
-              />
-              <div
-                className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-xl transition-colors ${
-                  scanMode === "qrcode" ? "border-purple-400" : "border-cyan-400"
-                }`}
-              />
-              <div
-                className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-xl transition-colors ${
-                  scanMode === "qrcode" ? "border-purple-400" : "border-cyan-400"
-                }`}
-              />
+            <div className="relative border-2 border-emerald-400 rounded-2xl w-72 h-56 shadow-[0_0_25px_rgba(52,211,153,0.35)] transition-all duration-300">
+              {/* 4 góc căn chỉnh chuyên nghiệp */}
+              <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 rounded-tl-lg border-emerald-300" />
+              <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 rounded-tr-lg border-emerald-300" />
+              <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 rounded-bl-lg border-emerald-300" />
+              <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 rounded-br-lg border-emerald-300" />
 
-              {/* Đường tâm nhắm cho Barcode */}
-              {scanMode === "barcode" && (
-                <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 h-px bg-cyan-400/40 border-t border-dashed border-cyan-400/60" />
-              )}
-
-              {/* Khung căn cữ cho QR Code */}
-              {scanMode === "qrcode" && (
-                <div className="absolute inset-8 border border-dashed border-purple-400/30 rounded-lg pointer-events-none" />
-              )}
+              {/* Đường tâm hỗ trợ căn barcode chuẩn xác */}
+              <div className="absolute top-1/2 left-4 right-4 h-px border-t border-dashed border-emerald-400/40" />
 
               {/* Nhãn chế độ bên trong khung */}
-              <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full bg-black/70 backdrop-blur border border-white/10 text-[10px] text-slate-300 font-medium whitespace-nowrap">
-                {scanMode === "barcode"
-                  ? "Khung quét Barcode 1D"
-                  : scanMode === "qrcode"
-                  ? "Khung quét QR Code 2D"
-                  : "Khung quét Barcode & QR Code"}
+              <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-black/80 backdrop-blur border border-emerald-500/30 text-[10px] text-emerald-300 font-semibold whitespace-nowrap shadow-md">
+                Khung quét Barcode & QR Code
               </div>
             </div>
           </div>
 
           {/* Laser quét liên tục */}
-          {!cameraError && !isDetectedRef.current && (
-            <div
-              className={`absolute left-0 right-0 h-0.5 shadow-lg pointer-events-none animate-scan-laser ${
-                scanMode === "qrcode"
-                  ? "bg-gradient-to-r from-transparent via-purple-400 to-transparent shadow-[0_0_10px_2px_#c084fc]"
-                  : "bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_10px_2px_#22d3ee]"
-              }`}
-            />
+          {!cameraError && !isDetected && (
+            <div className="absolute left-0 right-0 h-0.5 shadow-lg pointer-events-none animate-scan-laser bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_2px_#34d399]" />
           )}
         </div>
       </div>
@@ -367,23 +289,16 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
       <footer className="z-20 px-6 py-4 bg-gradient-to-t from-black via-black/90 to-transparent flex flex-col items-center space-y-2.5">
         <div className="flex items-center gap-2 text-xs text-slate-300 text-center px-2">
           <span className="relative flex h-2 w-2 shrink-0">
-            <span
-              className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                scanMode === "qrcode" ? "bg-purple-400" : "bg-cyan-400"
-              }`}
-            />
-            <span
-              className={`relative inline-flex rounded-full h-2 w-2 ${
-                scanMode === "qrcode" ? "bg-purple-500" : "bg-cyan-500"
-              }`}
-            />
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 bg-emerald-400" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
           </span>
           <span className="truncate">{scanStatus}</span>
         </div>
+
         <Button
-          onClick={onBack}
+          onClick={handleClose}
           variant="outline"
-          className="w-full h-11 rounded-xl border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800"
+          className="w-full h-11 border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-slate-200 rounded-xl"
         >
           Hủy quét
         </Button>
@@ -391,3 +306,4 @@ export default function ScanPage({ onPODetected, onBack }: ScanPageProps) {
     </div>
   )
 }
+

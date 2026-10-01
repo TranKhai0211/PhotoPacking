@@ -8,11 +8,11 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { CheckCircle2, ArrowLeft } from "lucide-react"
-import type { PhotoPackingItem } from "@/types/photoPacking"
+import type { PhotoPackingSummary } from "@/types/photoPackingSummary"
 
 interface NotifyResultDialogProps {
   open: boolean
-  detectedPO: PhotoPackingItem
+  detectedPO: PhotoPackingSummary
   message: string
   onBackToList: () => void
 }
@@ -27,11 +27,15 @@ export function NotifyResultDialog({
   message,
   onBackToList,
 }: NotifyResultDialogProps) {
-  const nextStep = detectedPO.currentStep + 1
-  const progressPercent = Math.min(
-    100,
-    Math.round((nextStep / detectedPO.totalStep) * 100)
-  )
+  const nextStep =
+    detectedPO.totalStep > 0
+      ? Math.min(detectedPO.totalStep, detectedPO.currentStep + 1)
+      : detectedPO.currentStep || 1
+
+  const progressPercent =
+    detectedPO.totalStep > 0
+      ? Math.min(100, Math.round((nextStep / detectedPO.totalStep) * 100))
+      : 100
 
   return (
     <Dialog
@@ -64,25 +68,27 @@ export function NotifyResultDialog({
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Mã PO</span>
               <span className="font-mono font-bold text-cyan-300">
-                {detectedPO.po}
+                {detectedPO.pO}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Sản phẩm</span>
               <span className="text-slate-200 font-medium truncate ml-4 text-right">
-                {detectedPO.productName}
+                {detectedPO.productCode} {detectedPO.productName ? `• ${detectedPO.productName}` : ""}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Bước hoàn tất</span>
               <span className="font-semibold text-emerald-400">
-                {nextStep} / {detectedPO.totalStep}
+                {detectedPO.totalStep > 0
+                  ? `${nextStep} / ${detectedPO.totalStep}`
+                  : `Bước ${detectedPO.currentStep || 1}`}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-400">Trạm</span>
               <span className="text-slate-300">
-                #{detectedPO.updator} (Xưởng {detectedPO.group})
+                #{detectedPO.updator || "#84920"} (Xưởng {detectedPO.group || "OSA"})
               </span>
             </div>
 
